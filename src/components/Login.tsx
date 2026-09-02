@@ -24,7 +24,8 @@ import {
   clearRememberedCredentials,
   signInWithGoogle,
   getUserFromFirestore,
-  getUsersByEmailFromFirestore
+  getUsersByEmailFromFirestore,
+  saveUserToFirestore
 } from '../lib/firebase';
 import firebaseConfig from '../../firebase-applet-config.json';
 
@@ -77,11 +78,29 @@ export default function Login({ onLogin }: LoginProps) {
         return;
       }
 
-      // If user has @japfa domain, allow login/role select as Kepala Gudang
+      // If user has @japfa domain, automatically provision/login as Kepala Gudang
       const emailLower = gUser.email.toLowerCase();
       const isJapfa = emailLower.includes('@japfa') || emailLower.includes('japfa.');
       if (isJapfa) {
-        setPendingGoogleUser(gUser);
+        const derivedName = gUser.displayName || gUser.email.split('@')[0]
+          .replace(/[._0-9]/g, ' ')
+          .trim()
+          .split(' ')
+          .filter(Boolean)
+          .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1))
+          .join(' ') || 'Kepala Gudang';
+
+        const newGoogleKepala: User = {
+          id: gUser.uid,
+          name: derivedName,
+          email: gUser.email.toLowerCase(),
+          role: 'KEPALA_GUDANG',
+          avatarUrl: gUser.photoURL || 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&q=80&w=150'
+        };
+
+        await saveUserToFirestore(newGoogleKepala);
+        onLogin(newGoogleKepala);
+        return;
       } else {
         throw new Error(`Akun Google (${gUser.email}) belum terdaftar. Silakan hubungi Kepala Gudang untuk didaftarkan terlebih dahulu.`);
       }
@@ -98,7 +117,7 @@ export default function Login({ onLogin }: LoginProps) {
     }
   };
 
-  const handleGoogleRoleSelect = (selectedRole: UserRole) => {
+  const handleGoogleRoleSelect = async (selectedRole: UserRole) => {
     if (!pendingGoogleUser) return;
 
     const emailLower = pendingGoogleUser.email?.toLowerCase() || '';
@@ -118,6 +137,7 @@ export default function Login({ onLogin }: LoginProps) {
         : 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&q=80&w=150')
     };
 
+    await saveUserToFirestore(newUser);
     onLogin(newUser);
   };
 
@@ -139,6 +159,9 @@ export default function Login({ onLogin }: LoginProps) {
       if (!cleanPassword) {
         throw new Error('Kata sandi wajib diisi.');
       }
+
+      // Check if email belongs to Japfa domain (Kepala Gudang)
+      const isJapfa = cleanEmail.includes('@japfa') || cleanEmail.includes('japfa.');
 
       // 1. Check if user enters credentials that match a demo user
       const matchedDemo = demoUsers.find(u => u.email.toLowerCase() === cleanEmail);
@@ -167,6 +190,42 @@ export default function Login({ onLogin }: LoginProps) {
       }
 
       if (matchingUsers.length === 0) {
+        if (isJapfa) {
+          // Auto-provision Kepala Gudang with Japfa corporate domain email
+          const emailUserPart = cleanEmail.split('@')[0] || 'Kepala Gudang';
+          const derivedName = emailUserPart
+            .replace(/[._0-9]/g, ' ')
+            .trim()
+            .split(' ')
+            .filter(Boolean)
+            .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+            .join(' ') || 'Kepala Gudang Japfa';
+
+          const nameIdSafe = derivedName.toLowerCase().replace(/[^a-zA-Z0-9]/g, '_');
+          const emailIdSafe = cleanEmail.replace(/[^a-zA-Z0-9]/g, '_');
+          const deterministicId = `user_${emailIdSafe}_${nameIdSafe}`;
+
+          const newKepalaGudang: User = {
+            id: deterministicId,
+            name: derivedName,
+            email: cleanEmail,
+            role: 'KEPALA_GUDANG',
+            password: cleanPassword,
+            avatarUrl: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&q=80&w=150'
+          };
+
+          await saveUserToFirestore(newKepalaGudang);
+
+          if (rememberMe) {
+            setRememberedCredentials(cleanEmail, cleanPassword, derivedName, 'KEPALA_GUDANG');
+          } else {
+            clearRememberedCredentials();
+          }
+
+          onLogin(newKepalaGudang);
+          return;
+        }
+
         throw new Error(`Akun dengan email "${cleanEmail}" belum terdaftar. Pendaftaran akun petugas kebersihan dilakukan langsung oleh Kepala Gudang.`);
       }
 
