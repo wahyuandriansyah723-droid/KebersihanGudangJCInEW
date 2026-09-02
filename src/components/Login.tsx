@@ -12,9 +12,9 @@ import {
   Copy,
   Check,
   AlertTriangle,
-  UserPlus,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Info
 } from 'lucide-react';
 import { User, UserRole } from '../types';
 import { demoUsers } from '../mockData';
@@ -36,10 +36,7 @@ export default function Login({ onLogin }: LoginProps) {
   const [remembered] = useState(() => getRememberedCredentials());
   const [email, setEmail] = useState(remembered.email);
   const [password, setPassword] = useState(remembered.password);
-  const [name, setName] = useState('');
-  const [role, setRole] = useState<UserRole>((remembered.role as UserRole) || 'PETUGAS_KEBERSIHAN');
   const [rememberMe, setRememberMe] = useState(remembered.rememberMe !== false); // Defaults to true
-  const [activeTab, setActiveTab] = useState<'login' | 'register'>('login');
   const [showDemoAccounts, setShowDemoAccounts] = useState(false);
   const [error, setError] = useState('');
   const [googleLoading, setGoogleLoading] = useState(false);
@@ -67,9 +64,26 @@ export default function Login({ onLogin }: LoginProps) {
       if (existingUser) {
         // User already exists, proceed to login directly!
         onLogin(existingUser);
-      } else {
-        // New user! Save details and ask for role
+        return;
+      }
+
+      // Check by email in Firestore
+      const emailUsers = await getUsersByEmailFromFirestore(gUser.email);
+      if (emailUsers.length === 1) {
+        onLogin(emailUsers[0]);
+        return;
+      } else if (emailUsers.length > 1) {
+        setAccountsToSelect(emailUsers);
+        return;
+      }
+
+      // If user has @japfa domain, allow login/role select as Kepala Gudang
+      const emailLower = gUser.email.toLowerCase();
+      const isJapfa = emailLower.includes('@japfa') || emailLower.includes('japfa.');
+      if (isJapfa) {
         setPendingGoogleUser(gUser);
+      } else {
+        throw new Error(`Akun Google (${gUser.email}) belum terdaftar. Silakan hubungi Kepala Gudang untuk didaftarkan terlebih dahulu.`);
       }
     } catch (err: any) {
       console.error('Google login error:', err);
@@ -113,184 +127,88 @@ export default function Login({ onLogin }: LoginProps) {
     setLoading(true);
 
     try {
-      if (!email) {
-        throw new Error('Email wajib diisi.');
+      const cleanEmail = email.trim().toLowerCase();
+      const cleanPassword = password.trim();
+
+      if (!cleanEmail) {
+        throw new Error('Alamat email wajib diisi.');
       }
-      if (!email.includes('@')) {
+      if (!cleanEmail.includes('@')) {
         throw new Error('Masukkan format email yang valid.');
       }
-      if (!password) {
+      if (!cleanPassword) {
         throw new Error('Kata sandi wajib diisi.');
       }
 
-      if (activeTab === 'register') {
-        if (!name) {
-          throw new Error('Nama Lengkap wajib diisi untuk pendaftaran.');
+      // 1. Check if user enters credentials that match a demo user
+      const matchedDemo = demoUsers.find(u => u.email.toLowerCase() === cleanEmail);
+      if (matchedDemo) {
+        if (cleanPassword === matchedDemo.password || cleanPassword === 'password123') {
+          if (rememberMe) {
+            setRememberedCredentials(cleanEmail, cleanPassword, matchedDemo.name, matchedDemo.role);
+          } else {
+            clearRememberedCredentials();
+          }
+          onLogin(matchedDemo);
+          return;
+        } else {
+          throw new Error('Kata sandi salah. Silakan periksa kembali kata sandi Anda.');
+        }
+      }
+
+      // 2. Query Firestore users with this email (multiple accounts possible)
+      let matchingUsers = await getUsersByEmailFromFirestore(cleanEmail);
+
+      // 3. For backward compatibility, also check if there is a legacy account in the old format
+      const legacyId = 'email-' + cleanEmail.replace(/[^a-zA-Z0-9]/g, '_');
+      const legacyUser = await getUserFromFirestore(legacyId);
+      if (legacyUser && !matchingUsers.some(u => u.id === legacyUser.id)) {
+        matchingUsers = [legacyUser, ...matchingUsers];
+      }
+
+      if (matchingUsers.length === 0) {
+        throw new Error(`Akun dengan email "${cleanEmail}" belum terdaftar. Pendaftaran akun petugas kebersihan dilakukan langsung oleh Kepala Gudang.`);
+      }
+
+      if (matchingUsers.length === 1) {
+        const existingUser = matchingUsers[0];
+        if (existingUser.password && existingUser.password !== cleanPassword) {
+          throw new Error('Kata sandi salah. Hubungi Kepala Gudang jika Anda lupa kata sandi.');
         }
 
-        const isJapfa = email.trim().toLowerCase().includes('@japfa') || email.trim().toLowerCase().includes('japfa.');
-        if (role === 'KEPALA_GUDANG' && !isJapfa) {
-          throw new Error('Hanya akun email dengan domain @Japfa yang diperbolehkan menjadi Kepala Gudang. Akun @gmail atau domain lain hanya bisa menjadi Petugas Gudang.');
+        // Auto-save password if not present (historical support)
+        if (!existingUser.password) {
+          existingUser.password = cleanPassword;
         }
-
-        const nameIdSafe = name.trim().toLowerCase().replace(/[^a-zA-Z0-9]/g, '_');
-        const emailIdSafe = email.trim().toLowerCase().replace(/[^a-zA-Z0-9]/g, '_');
-        const deterministicId = `user_${emailIdSafe}_${nameIdSafe}`;
-
-        // Check if user already exists
-        const existingUser = await getUserFromFirestore(deterministicId);
-        if (existingUser) {
-          throw new Error('Nama dengan email ini sudah terdaftar. Silakan gunakan nama lengkap atau variasi nama lain.');
-        }
-
-        const newUser: User = {
-          id: deterministicId,
-          name: name.trim(),
-          email: email.trim().toLowerCase(),
-          role: role,
-          password: password,
-          avatarUrl: role === 'KEPALA_GUDANG' 
-            ? 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&q=80&w=150'
-            : 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&q=80&w=150'
-        };
 
         if (rememberMe) {
-          setRememberedCredentials(email, password, name, role);
+          setRememberedCredentials(cleanEmail, cleanPassword, existingUser.name, existingUser.role);
         } else {
           clearRememberedCredentials();
         }
 
-        onLogin(newUser);
+        onLogin(existingUser);
       } else {
-        // ActiveTab: Login
-        // 1. Check if user enters credentials that match a demo user
-        const matchedDemo = demoUsers.find(u => u.email.toLowerCase() === email.trim().toLowerCase());
-        if (matchedDemo) {
-          if (password === matchedDemo.password || password === 'password123') {
-            if (rememberMe) {
-              setRememberedCredentials(email, password, matchedDemo.name, matchedDemo.role);
-            } else {
-              clearRememberedCredentials();
-            }
-            onLogin(matchedDemo);
-            return;
-          } else {
-            throw new Error('Kata sandi salah.');
-          }
-        }
-
-        // 2. Query Firestore users with this email (multiple accounts possible)
-        let matchingUsers = await getUsersByEmailFromFirestore(email);
-
-        // 3. For backward compatibility, also check if there is a legacy account in the old format
-        const legacyId = 'email-' + email.trim().toLowerCase().replace(/[^a-zA-Z0-9]/g, '_');
-        const legacyUser = await getUserFromFirestore(legacyId);
-        if (legacyUser && !matchingUsers.some(u => u.id === legacyUser.id)) {
-          matchingUsers = [legacyUser, ...matchingUsers];
-        }
-
-        if (matchingUsers.length === 0) {
-          // Derive default name from email if name is not set
-          const emailUserPart = email.split('@')[0] || 'User';
-          const suggestedName = emailUserPart
-            .replace(/[._0-9]/g, ' ')
-            .trim()
-            .split(' ')
-            .filter(Boolean)
-            .map(w => w.charAt(0).toUpperCase() + w.slice(1))
-            .join(' ') || emailUserPart;
-          
-          if (!name) {
-            setName(suggestedName);
-          }
-
-          throw new Error(`Akun dengan email "${email}" belum terdaftar. Silakan klik tombol di bawah untuk mendaftarkan akun baru.`);
-        }
-
-        if (matchingUsers.length === 1) {
-          const existingUser = matchingUsers[0];
-          if (existingUser.password && existingUser.password !== password) {
-            throw new Error('Kata sandi salah.');
-          }
-
-          // Auto-save password if not present (historical support)
-          if (!existingUser.password) {
-            existingUser.password = password;
-          }
-
+        // Multiple accounts exist with this email.
+        // First, filter by password to see if exactly one account matches the typed password
+        const correctPasswordUsers = matchingUsers.filter(u => u.password === cleanPassword);
+        if (correctPasswordUsers.length === 1) {
+          // Exactly one matches the password, auto login!
+          const existingUser = correctPasswordUsers[0];
           if (rememberMe) {
-            setRememberedCredentials(email, password, existingUser.name, existingUser.role);
+            setRememberedCredentials(cleanEmail, cleanPassword, existingUser.name, existingUser.role);
           } else {
             clearRememberedCredentials();
           }
-
           onLogin(existingUser);
         } else {
-          // Multiple accounts exist with this email.
-          // First, filter by password to see if exactly one account matches the typed password
-          const correctPasswordUsers = matchingUsers.filter(u => u.password === password);
-          if (correctPasswordUsers.length === 1) {
-            // Exactly one matches the password, auto login!
-            const existingUser = correctPasswordUsers[0];
-            if (rememberMe) {
-              setRememberedCredentials(email, password, existingUser.name, existingUser.role);
-            } else {
-              clearRememberedCredentials();
-            }
-            onLogin(existingUser);
-          } else {
-            // Show selection screen of all users sharing this email
-            setAccountsToSelect(matchingUsers);
-          }
+          // Show selection screen of all users sharing this email
+          setAccountsToSelect(matchingUsers);
         }
       }
     } catch (err: any) {
-      console.error('Manual login/register error:', err);
+      console.error('Manual login error:', err);
       setError(err?.message || 'Terjadi kesalahan sistem.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleQuickRegisterAndLogin = async () => {
-    if (!email || !password) {
-      setError('Email dan kata sandi wajib diisi.');
-      return;
-    }
-    setLoading(true);
-    setError('');
-    try {
-      const emailUserPart = email.split('@')[0] || 'User';
-      const cleanName = (name || emailUserPart.replace(/[._0-9]/g, ' ').trim().split(' ').filter(Boolean).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') || emailUserPart).trim();
-      
-      const isJapfa = email.trim().toLowerCase().includes('@japfa') || email.trim().toLowerCase().includes('japfa.');
-      const userRole = (role === 'KEPALA_GUDANG' && isJapfa) ? 'KEPALA_GUDANG' : 'PETUGAS_KEBERSIHAN';
-
-      const nameIdSafe = cleanName.toLowerCase().replace(/[^a-zA-Z0-9]/g, '_');
-      const emailIdSafe = email.trim().toLowerCase().replace(/[^a-zA-Z0-9]/g, '_');
-      const deterministicId = `user_${emailIdSafe}_${nameIdSafe}`;
-
-      const newUser: User = {
-        id: deterministicId,
-        name: cleanName,
-        email: email.trim().toLowerCase(),
-        role: userRole,
-        password: password,
-        avatarUrl: userRole === 'KEPALA_GUDANG' 
-          ? 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&q=80&w=150'
-          : 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&q=80&w=150'
-      };
-
-      if (rememberMe) {
-        setRememberedCredentials(email, password, cleanName, userRole);
-      } else {
-        clearRememberedCredentials();
-      }
-
-      onLogin(newUser);
-    } catch (err: any) {
-      console.error('Quick register error:', err);
-      setError(err?.message || 'Gagal mendaftarkan akun.');
     } finally {
       setLoading(false);
     }
@@ -634,98 +552,12 @@ export default function Login({ onLogin }: LoginProps) {
           </p>
         </div>
 
-        {/* Tab Selection */}
-        <div className="flex bg-zinc-950 p-1 rounded-xl border border-zinc-850/80 mb-6">
-          <button
-            type="button"
-            onClick={() => {
-              setActiveTab('login');
-              setError('');
-            }}
-            className={`flex-1 py-2 text-xs font-semibold rounded-lg transition-all flex items-center justify-center space-x-1.5 cursor-pointer ${
-              activeTab === 'login'
-                ? 'bg-zinc-900 border border-zinc-800 text-white shadow-md'
-                : 'text-zinc-400 hover:text-white'
-            }`}
-          >
-            <LogIn className="w-3.5 h-3.5" />
-            <span>Masuk</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setActiveTab('register');
-              setError('');
-            }}
-            className={`flex-1 py-2 text-xs font-semibold rounded-lg transition-all flex items-center justify-center space-x-1.5 cursor-pointer ${
-              activeTab === 'register'
-                ? 'bg-zinc-900 border border-zinc-800 text-white shadow-md'
-                : 'text-zinc-400 hover:text-white'
-            }`}
-          >
-            <UserPlus className="w-3.5 h-3.5" />
-            <span>Daftar Akun</span>
-          </button>
-        </div>
-
-        {/* Form */}
+        {/* Login Form */}
         <form onSubmit={handleFormSubmit} className="space-y-4">
           {error && (
-            <div className="p-3.5 bg-rose-500/10 border border-rose-500/20 text-rose-400 rounded-xl text-xs font-medium space-y-2">
+            <div className="p-3.5 bg-rose-500/10 border border-rose-500/20 text-rose-400 rounded-xl text-xs font-medium space-y-1.5">
               <div className="text-center leading-relaxed">{error}</div>
-              {activeTab === 'login' && error.includes('belum terdaftar') && (
-                <div className="pt-1.5 space-y-1.5">
-                  <button
-                    type="button"
-                    onClick={handleQuickRegisterAndLogin}
-                    disabled={loading}
-                    className="w-full py-2.5 px-3 bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold rounded-lg text-xs transition-all flex items-center justify-center space-x-1.5 cursor-pointer shadow-md shadow-emerald-500/20"
-                  >
-                    <UserPlus className="w-4 h-4" />
-                    <span>Daftar Akun Baru &amp; Masuk Sekarang</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setActiveTab('register');
-                      setError('');
-                    }}
-                    className="w-full py-1.5 px-3 bg-zinc-900/80 hover:bg-zinc-850 text-zinc-300 font-medium rounded-lg border border-zinc-800 text-[11px] transition-all flex items-center justify-center space-x-1 cursor-pointer"
-                  >
-                    <span>Lengkapi Data di Formulir Pendaftaran</span>
-                  </button>
-                </div>
-              )}
             </div>
-          )}
-
-          {activeTab === 'register' && (
-            <motion.div
-              initial={{ opacity: 0, y: -10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="space-y-1.5"
-            >
-              <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">
-                Nama Lengkap
-              </label>
-              <div className="relative">
-                <span className="absolute inset-y-0 left-0 flex items-center pl-3.5 text-zinc-500">
-                  <UserIcon className="w-4 h-4" />
-                </span>
-                <input
-                  type="text"
-                  placeholder="Masukkan nama lengkap Anda"
-                  value={name}
-                  onChange={(e) => {
-                    setName(e.target.value);
-                    setError('');
-                  }}
-                  className="w-full pl-10 pr-4 py-2.5 bg-zinc-950 border border-zinc-850 hover:border-zinc-700 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/20 rounded-xl text-sm text-zinc-200 placeholder-zinc-700 outline-none transition-all"
-                  id="name-input"
-                  required
-                />
-              </div>
-            </motion.div>
           )}
 
           <div className="space-y-1.5">
@@ -741,15 +573,8 @@ export default function Login({ onLogin }: LoginProps) {
                 placeholder="nama@gudang.com"
                 value={email}
                 onChange={(e) => {
-                  const val = e.target.value;
-                  setEmail(val);
+                  setEmail(e.target.value);
                   setError('');
-                  
-                  // If they select KEPALA_GUDANG but email isn't Japfa, automatically fallback to PETUGAS_KEBERSIHAN
-                  const isJapfa = val.trim().toLowerCase().includes('@japfa') || val.trim().toLowerCase().includes('japfa.');
-                  if (role === 'KEPALA_GUDANG' && val && !isJapfa) {
-                    setRole('PETUGAS_KEBERSIHAN');
-                  }
                 }}
                 className="w-full pl-10 pr-4 py-2.5 bg-zinc-950 border border-zinc-850 hover:border-zinc-700 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/20 rounded-xl text-sm text-zinc-200 placeholder-zinc-700 outline-none transition-all"
                 id="email-input"
@@ -783,71 +608,6 @@ export default function Login({ onLogin }: LoginProps) {
             </div>
           </div>
 
-          {activeTab === 'register' && (
-            <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="space-y-2 pt-1"
-            >
-              <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">
-                Pilih Jabatan (Role)
-              </label>
-              <div className="grid grid-cols-2 gap-3">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setError('');
-                    setRole('PETUGAS_KEBERSIHAN');
-                  }}
-                  className={`flex items-center justify-center space-x-2 p-2.5 rounded-xl border text-xs font-bold uppercase tracking-wider transition-all cursor-pointer ${
-                    role === 'PETUGAS_KEBERSIHAN'
-                      ? 'bg-emerald-500/10 border-emerald-500 text-emerald-400 shadow-sm shadow-emerald-500/10'
-                      : 'bg-zinc-950 border-zinc-850 text-zinc-400 hover:border-zinc-750'
-                  }`}
-                >
-                  <UserIcon className="w-4 h-4" />
-                  <span>Petugas</span>
-                </button>
-                {(() => {
-                  const isJapfa = email.trim().toLowerCase().includes('@japfa') || email.trim().toLowerCase().includes('japfa.');
-                  return (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (!isJapfa) {
-                          setError('Hanya akun email dengan domain @Japfa yang diperbolehkan menjadi Kepala Gudang.');
-                          return;
-                        }
-                        setError('');
-                        setRole('KEPALA_GUDANG');
-                      }}
-                      className={`flex items-center justify-center space-x-2 p-2.5 rounded-xl border text-xs font-bold uppercase tracking-wider transition-all ${
-                        !isJapfa
-                          ? 'bg-zinc-950/40 border-zinc-900 text-zinc-600 opacity-40 cursor-not-allowed'
-                          : role === 'KEPALA_GUDANG'
-                          ? 'bg-sky-500/10 border-sky-500 text-sky-400 shadow-sm shadow-sky-500/10 cursor-pointer'
-                          : 'bg-zinc-950 border-zinc-850 text-zinc-400 hover:border-zinc-750 cursor-pointer'
-                      }`}
-                      title={!isJapfa ? 'Hanya email @japfa yang bisa memilih peran ini' : ''}
-                    >
-                      <Shield className="w-4 h-4" />
-                      <span>Kepala</span>
-                    </button>
-                  );
-                })()}
-              </div>
-
-              {/* Helper text based on email */}
-              <p className="text-[10px] leading-relaxed font-medium mt-1.5">
-                {email.trim().toLowerCase().includes('@japfa') || email.trim().toLowerCase().includes('japfa.') ? (
-                  <span className="text-emerald-400/90">✓ Email @Japfa terverifikasi: Berhak mendapatkan hak akses penuh sebagai Kepala Gudang.</span>
-                ) : (
-                  <span className="text-amber-400/90">⚠ Akun non-Japfa ({email || 'email luar'}) hanya diperbolehkan menjadi Petugas Kebersihan. Hak akses Kepala Gudang khusus untuk email @japfa.</span>
-                )}
-              </p>
-            </motion.div>
-          )}
-
           <div className="flex items-center justify-between py-1">
             <label className="flex items-center space-x-2 text-xs text-zinc-400 cursor-pointer select-none">
               <input
@@ -872,14 +632,20 @@ export default function Login({ onLogin }: LoginProps) {
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
               </svg>
-            ) : activeTab === 'login' ? (
-              <LogIn className="w-4 h-4" />
             ) : (
-              <UserPlus className="w-4 h-4" />
+              <LogIn className="w-4 h-4" />
             )}
-            <span>{loading ? 'Memproses...' : activeTab === 'login' ? 'Masuk ke Sistem' : 'Daftar Akun & Masuk'}</span>
+            <span>{loading ? 'Memproses Masuk...' : 'Masuk ke Sistem'}</span>
           </motion.button>
         </form>
+
+        {/* Cleaner Registration Notice */}
+        <div className="mt-4 p-3 bg-zinc-950/60 border border-zinc-850/80 rounded-xl flex items-start space-x-2 text-[11px] text-zinc-400">
+          <Info className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+          <span>
+            Pendaftaran akun Petugas Kebersihan dilakukan langsung oleh <strong>Kepala Gudang</strong> melalui dasbor manajemen.
+          </span>
+        </div>
 
         {/* Separator */}
         <div className="relative my-6">

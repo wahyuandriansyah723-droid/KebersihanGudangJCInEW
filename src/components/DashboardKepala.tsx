@@ -44,7 +44,13 @@ import {
   Filter,
   Briefcase,
   CheckSquare,
-  CheckCheck
+  CheckCheck,
+  UserPlus,
+  Lock,
+  Key,
+  Copy,
+  Share2,
+  EyeOff
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -53,6 +59,7 @@ import { defaultSystemSettings } from '../mockData';
 import ExportReportsModal from './ExportReportsModal';
 import DashboardSettings from './DashboardSettings';
 import { AttendanceLocationModal } from './AttendanceLocationModal';
+import AddCleanerModal from './AddCleanerModal';
 
 const PRESET_AVATARS = [
   'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=300',
@@ -124,7 +131,8 @@ interface DashboardKepalaProps {
   onDeleteTask: (id: string) => void;
   onDeleteReport: (id: string) => void;
   onDeleteUser: (id: string) => void;
-  onUpdateUser?: (id: string, updates: { name?: string; avatarUrl?: string }) => Promise<void> | void;
+  onAddCleaner?: (cleanerData: { name: string; email: string; password: string; avatarUrl?: string }) => Promise<User>;
+  onUpdateUser?: (id: string, updates: { name?: string; avatarUrl?: string; password?: string }) => Promise<void> | void;
   onDeleteAttendance?: (ids: string[]) => void;
   onSaveSettings?: (settings: SystemSettings) => Promise<void>;
   onUpdateWarehouseArea?: (id: string, newArea: string) => Promise<void>;
@@ -147,6 +155,7 @@ export default function DashboardKepala({
   onDeleteTask,
   onDeleteReport,
   onDeleteUser,
+  onAddCleaner,
   onUpdateUser,
   onDeleteAttendance,
   onSaveSettings,
@@ -171,11 +180,16 @@ export default function DashboardKepala({
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [exportPeriod, setExportPeriod] = useState<'TODAY' | 'WEEK' | 'MONTH'>('TODAY');
 
-  // Cleaner management state
+  // Cleaner management & registration state
+  const [isAddCleanerModalOpen, setIsAddCleanerModalOpen] = useState(false);
   const [cleanerSearch, setCleanerSearch] = useState('');
   const [editingCleaner, setEditingCleaner] = useState<User | null>(null);
   const [cleanerNameInput, setCleanerNameInput] = useState('');
   const [cleanerAvatarInput, setCleanerAvatarInput] = useState('');
+  const [cleanerPasswordInput, setCleanerPasswordInput] = useState('');
+  const [showPasswordInEdit, setShowPasswordInEdit] = useState(false);
+  const [showPasswordMap, setShowPasswordMap] = useState<Record<string, boolean>>({});
+  const [copiedCleanerCredentialsId, setCopiedCleanerCredentialsId] = useState<string | null>(null);
   const [avatarTab, setAvatarTab] = useState<'UPLOAD' | 'PRESET' | 'URL'>('UPLOAD');
   const [customUrlInput, setCustomUrlInput] = useState('');
   const [isUpdatingCleaner, setIsUpdatingCleaner] = useState(false);
@@ -714,9 +728,47 @@ export default function DashboardKepala({
     setEditingCleaner(cleaner);
     setCleanerNameInput(cleaner.name);
     setCleanerAvatarInput(cleaner.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=300');
+    setCleanerPasswordInput(cleaner.password || 'password123');
+    setShowPasswordInEdit(false);
     setAvatarTab(defaultTab);
     setCustomUrlInput('');
     setCleanerUpdateError('');
+  };
+
+  const handleCopyCleanerCredentials = (cleaner: User) => {
+    const rawPass = cleaner.password || 'password123';
+    const text = `📋 *AKUN LOGIN PETUGAS GUDANGCLEAN*\n\n` +
+      `👤 *Nama*: ${cleaner.name}\n` +
+      `🔑 *Peran*: Petugas Kebersihan\n` +
+      `📧 *Email Login*: ${cleaner.email}\n` +
+      `🔒 *Kata Sandi*: ${rawPass}\n\n` +
+      `🌐 *Akses Aplikasi*: ${window.location.origin}\n` +
+      `_Gunakan data ini untuk masuk ke aplikasi GudangClean._`;
+
+    navigator.clipboard.writeText(text);
+    setCopiedCleanerCredentialsId(cleaner.id);
+    setTimeout(() => setCopiedCleanerCredentialsId(null), 3000);
+  };
+
+  const handleShareCleanerWhatsApp = (cleaner: User) => {
+    const rawPass = cleaner.password || 'password123';
+    const text = `📋 *AKUN LOGIN PETUGAS GUDANGCLEAN*\n\n` +
+      `Halo *${cleaner.name}*,\nBerikut adalah akun Anda untuk aplikasi GudangClean:\n\n` +
+      `👤 *Nama*: ${cleaner.name}\n` +
+      `🔑 *Peran*: Petugas Kebersihan\n` +
+      `📧 *Email Login*: ${cleaner.email}\n` +
+      `🔒 *Kata Sandi*: ${rawPass}\n\n` +
+      `🌐 *Akses Aplikasi*: ${window.location.origin}\n\n` +
+      `Silakan masuk dan lakukan presensi sebelum mulai bertugas. Terima kasih!`;
+
+    window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
+  };
+
+  const togglePasswordVisibility = (cleanerId: string) => {
+    setShowPasswordMap(prev => ({
+      ...prev,
+      [cleanerId]: !prev[cleanerId]
+    }));
   };
 
   const handleAvatarFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -780,6 +832,10 @@ export default function DashboardKepala({
       setCleanerUpdateError('Nama petugas minimal 2 karakter.');
       return;
     }
+    if (cleanerPasswordInput && cleanerPasswordInput.trim().length < 4) {
+      setCleanerUpdateError('Kata sandi login minimal 4 karakter.');
+      return;
+    }
 
     try {
       setIsUpdatingCleaner(true);
@@ -787,7 +843,8 @@ export default function DashboardKepala({
       if (onUpdateUser) {
         await onUpdateUser(editingCleaner.id, {
           name: trimmed,
-          avatarUrl: cleanerAvatarInput || undefined
+          avatarUrl: cleanerAvatarInput || undefined,
+          password: cleanerPasswordInput ? cleanerPasswordInput.trim() : undefined
         });
       }
       setEditingCleaner(null);
@@ -2216,43 +2273,123 @@ export default function DashboardKepala({
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -10 }}
             transition={{ duration: 0.2 }}
-            className="space-y-4"
+            className="space-y-6"
           >
-            <div className="bg-zinc-900/30 border border-zinc-900 rounded-2xl p-6 shadow-xl space-y-6">
-              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-zinc-800 pb-5">
+            {/* Header & Registration Call to Action */}
+            <div className="bg-zinc-900/30 border border-zinc-900 rounded-3xl p-6 md:p-8 shadow-xl space-y-6">
+              <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 border-b border-zinc-850/80 pb-6">
                 <div>
-                  <h3 className="font-extrabold font-display text-white text-lg flex items-center space-x-2">
-                    <UserCheck className="w-5 h-5 text-emerald-400" />
-                    <span>Daftar Petugas Kebersihan</span>
-                  </h3>
-                  <p className="text-xs text-zinc-500 mt-1">
-                    Kelola seluruh petugas kebersihan yang terdaftar dalam sistem. Anda dapat mengedit nama petugas atau menghapus akun dari sistem.
+                  <div className="flex items-center space-x-2.5">
+                    <div className="p-2 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-xl">
+                      <UserCheck className="w-5 h-5" />
+                    </div>
+                    <h3 className="font-extrabold font-display text-white text-xl tracking-tight">
+                      Dasbor Manajemen &amp; Pendaftaran Petugas Kebersihan
+                    </h3>
+                  </div>
+                  <p className="text-xs text-zinc-400 mt-1.5 leading-relaxed max-w-2xl">
+                    Daftarkan akun petugas baru, atur foto profil &amp; kata sandi login, bagikan data akun via WhatsApp, serta tinjau progres tugas dan status presensi petugas kebersihan secara terpusat.
                   </p>
                 </div>
 
-                {/* Cleaner Search Input */}
-                <div className="flex items-center space-x-3 w-full md:w-auto">
-                  <div className="relative flex-1 md:w-64">
-                    <Search className="w-4 h-4 text-zinc-600 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                    <input
-                      type="text"
-                      value={cleanerSearch}
-                      onChange={(e) => setCleanerSearch(e.target.value)}
-                      placeholder="Cari nama atau email..."
-                      className="w-full bg-zinc-950 border border-zinc-800 focus:border-emerald-500 rounded-xl pl-9 pr-4 py-2 text-xs text-zinc-200 placeholder-zinc-700 outline-none transition-all font-medium"
-                    />
-                  </div>
-                  {cleanerSearch && (
-                    <button
-                      onClick={() => setCleanerSearch('')}
-                      className="px-2.5 py-2 bg-zinc-850 hover:bg-zinc-800 text-zinc-400 text-xs rounded-xl transition-all cursor-pointer"
-                    >
-                      Reset
-                    </button>
-                  )}
+                {/* Main Action: Register New Cleaner */}
+                <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
+                  <button
+                    type="button"
+                    onClick={() => setIsAddCleanerModalOpen(true)}
+                    className="flex-1 lg:flex-none py-3 px-5 bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-extrabold text-xs rounded-xl shadow-lg shadow-emerald-500/20 transition-all flex items-center justify-center space-x-2 cursor-pointer border-none"
+                    id="btn-add-cleaner"
+                  >
+                    <UserPlus className="w-4 h-4" />
+                    <span>+ Daftarkan Petugas Baru</span>
+                  </button>
                 </div>
               </div>
 
+              {/* Stats Summary Cards */}
+              {(() => {
+                const cleaners = users.filter(u => u.role === 'PETUGAS_KEBERSIHAN');
+                const todayAttendanceCleaners = attendanceList.filter(a => a.date === todayStr);
+                const activePresentCount = new Set(todayAttendanceCleaners.map(a => a.userName || a.userEmail)).size;
+                const totalCleanerReports = reports.length;
+                const totalCompletedTasks = tasks.filter(t => t.status === 'COMPLETED').length;
+
+                return (
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
+                    <div className="p-4 bg-zinc-950/60 border border-zinc-850/80 rounded-2xl flex items-center space-x-3.5">
+                      <div className="p-2.5 bg-emerald-500/10 text-emerald-400 rounded-xl">
+                        <Users className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <span className="text-[10px] uppercase font-bold text-zinc-500 tracking-wider block font-mono">
+                          Total Petugas
+                        </span>
+                        <span className="text-lg font-extrabold text-white font-mono">{cleaners.length} Orang</span>
+                      </div>
+                    </div>
+
+                    <div className="p-4 bg-zinc-950/60 border border-zinc-850/80 rounded-2xl flex items-center space-x-3.5">
+                      <div className="p-2.5 bg-sky-500/10 text-sky-400 rounded-xl">
+                        <CheckCheck className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <span className="text-[10px] uppercase font-bold text-zinc-500 tracking-wider block font-mono">
+                          Hadir Hari Ini
+                        </span>
+                        <span className="text-lg font-extrabold text-sky-400 font-mono">{activePresentCount} Petugas</span>
+                      </div>
+                    </div>
+
+                    <div className="p-4 bg-zinc-950/60 border border-zinc-850/80 rounded-2xl flex items-center space-x-3.5">
+                      <div className="p-2.5 bg-teal-500/10 text-teal-400 rounded-xl">
+                        <FileText className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <span className="text-[10px] uppercase font-bold text-zinc-500 tracking-wider block font-mono">
+                          Total Laporan
+                        </span>
+                        <span className="text-lg font-extrabold text-teal-400 font-mono">{totalCleanerReports} Laporan</span>
+                      </div>
+                    </div>
+
+                    <div className="p-4 bg-zinc-950/60 border border-zinc-850/80 rounded-2xl flex items-center space-x-3.5">
+                      <div className="p-2.5 bg-amber-500/10 text-amber-400 rounded-xl">
+                        <CheckSquare className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <span className="text-[10px] uppercase font-bold text-zinc-500 tracking-wider block font-mono">
+                          Tugas Selesai
+                        </span>
+                        <span className="text-lg font-extrabold text-amber-400 font-mono">{totalCompletedTasks} Tugas</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Search and Filters */}
+              <div className="flex items-center justify-between gap-4 pt-2">
+                <div className="relative flex-1 max-w-md">
+                  <Search className="w-4 h-4 text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={cleanerSearch}
+                    onChange={(e) => setCleanerSearch(e.target.value)}
+                    placeholder="Cari berdasarkan nama lengkap atau email petugas..."
+                    className="w-full bg-zinc-950 border border-zinc-850 focus:border-emerald-500 rounded-xl pl-9 pr-4 py-2.5 text-xs text-zinc-200 placeholder-zinc-700 outline-none transition-all font-medium"
+                  />
+                </div>
+                {cleanerSearch && (
+                  <button
+                    onClick={() => setCleanerSearch('')}
+                    className="px-3 py-2 bg-zinc-850 hover:bg-zinc-800 text-zinc-400 text-xs rounded-xl transition-all cursor-pointer"
+                  >
+                    Reset Pencarian
+                  </button>
+                )}
+              </div>
+
+              {/* Cleaner List Cards */}
               {(() => {
                 const cleaners = users.filter(u => u.role === 'PETUGAS_KEBERSIHAN');
                 const filtered = cleaners.filter(u => {
@@ -2262,47 +2399,62 @@ export default function DashboardKepala({
 
                 if (cleaners.length === 0) {
                   return (
-                    <div className="p-12 text-center bg-zinc-900/10 rounded-xl border border-zinc-900">
-                      <AlertTriangle className="w-12 h-12 text-zinc-700 mx-auto mb-3" />
-                      <h4 className="font-bold text-white mb-1">Tidak Ada Petugas Terdaftar</h4>
-                      <p className="text-xs text-zinc-400 max-w-sm mx-auto">
-                        Belum ada petugas kebersihan yang terdaftar. Petugas baru dapat membuat akun melalui formulir pendaftaran di halaman login.
+                    <div className="p-12 text-center bg-zinc-950/40 rounded-2xl border border-zinc-850 border-dashed space-y-4">
+                      <div className="p-3.5 bg-emerald-500/10 text-emerald-400 rounded-2xl inline-block">
+                        <UserPlus className="w-8 h-8 mx-auto" />
+                      </div>
+                      <h4 className="font-extrabold text-white text-base">Belum Ada Petugas Kebersihan</h4>
+                      <p className="text-xs text-zinc-400 max-w-md mx-auto leading-relaxed">
+                        Akun petugas kebersihan didaftarkan langsung oleh Kepala Gudang. Klik tombol di bawah untuk membuat akun petugas pertama.
                       </p>
+                      <button
+                        type="button"
+                        onClick={() => setIsAddCleanerModalOpen(true)}
+                        className="py-2.5 px-5 bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold text-xs rounded-xl transition-all cursor-pointer inline-flex items-center space-x-2"
+                      >
+                        <UserPlus className="w-4 h-4" />
+                        <span>Daftarkan Petugas Sekarang</span>
+                      </button>
                     </div>
                   );
                 }
 
                 if (filtered.length === 0) {
                   return (
-                    <div className="p-10 text-center bg-zinc-900/10 rounded-xl border border-zinc-900 border-dashed">
-                      <Search className="w-10 h-10 text-zinc-700 mx-auto mb-2.5" />
+                    <div className="p-10 text-center bg-zinc-950/40 rounded-2xl border border-zinc-850 border-dashed">
+                      <Search className="w-8 h-8 text-zinc-600 mx-auto mb-2.5" />
                       <h4 className="font-bold text-zinc-300 text-sm mb-1">Petugas Tidak Ditemukan</h4>
                       <p className="text-xs text-zinc-500 max-w-sm mx-auto">
-                        Tidak ada petugas kebersihan yang sesuai dengan kata kunci pencarian "{cleanerSearch}".
+                        Tidak ada petugas kebersihan yang sesuai dengan kata kunci "{cleanerSearch}".
                       </p>
                     </div>
                   );
                 }
 
                 return (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4.5">
                     {filtered.map((u) => {
                       const totalCleanerReports = reports.filter(r => r.cleanerEmail === u.email || r.cleanerName === u.name).length;
                       const totalCleanerTasks = tasks.filter(t => t.assignedToUserId === u.id || t.assignedToEmail === u.email).length;
                       const totalCleanerAttendance = attendanceList.filter(a => a.userId === u.id || a.userEmail === u.email).length;
+                      
+                      const rawPassword = u.password || 'password123';
+                      const isPasswordShown = Boolean(showPasswordMap[u.id]);
+                      const isCopied = copiedCleanerCredentialsId === u.id;
 
                       return (
                         <div 
                           key={u.id}
-                          className="p-4.5 bg-zinc-950/40 border border-zinc-900 rounded-xl flex flex-col justify-between hover:border-zinc-800 transition-all space-y-4 group"
+                          className="p-5 bg-zinc-950/60 border border-zinc-850/90 hover:border-zinc-750 rounded-2xl flex flex-col justify-between transition-all space-y-4 shadow-lg group relative"
                         >
+                          {/* Header Profile Section */}
                           <div className="flex items-start justify-between">
                             <div className="flex items-center space-x-3.5">
                               <div className="relative group/avatar cursor-pointer" onClick={() => handleOpenEditCleaner(u, 'UPLOAD')}>
                                 <img
                                   src={u.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=150'}
                                   alt={u.name}
-                                  className="w-13 h-13 rounded-full object-cover border-2 border-zinc-800 group-hover/avatar:border-emerald-500 shadow-md transition-all"
+                                  className="w-14 h-14 rounded-2xl object-cover border-2 border-zinc-800 group-hover/avatar:border-emerald-500 shadow-md transition-all"
                                   referrerPolicy="no-referrer"
                                 />
                                 <button
@@ -2311,61 +2463,132 @@ export default function DashboardKepala({
                                     e.stopPropagation();
                                     handleOpenEditCleaner(u, 'UPLOAD');
                                   }}
-                                  className="absolute -bottom-1 -right-1 p-1.5 bg-emerald-500 hover:bg-emerald-400 text-zinc-950 rounded-full shadow-lg border-2 border-zinc-950 transition-all cursor-pointer group-hover/avatar:scale-110"
+                                  className="absolute -bottom-1 -right-1 p-1.5 bg-emerald-500 hover:bg-emerald-400 text-zinc-950 rounded-lg shadow-lg border-2 border-zinc-950 transition-all cursor-pointer group-hover/avatar:scale-110"
                                   title="Ganti Foto Petugas"
                                 >
                                   <Camera className="w-3 h-3" />
                                 </button>
                               </div>
                               <div>
-                                <h4 className="font-bold text-white text-sm group-hover:text-emerald-400 transition-colors">
+                                <h4 className="font-extrabold text-white text-sm group-hover:text-emerald-400 transition-colors">
                                   {u.name}
                                 </h4>
-                                <span className="text-[10px] text-zinc-500 block font-mono leading-relaxed truncate max-w-[170px]">
+                                <span className="text-[11px] text-zinc-400 block font-mono leading-tight truncate max-w-[170px] mt-0.5">
                                   {u.email}
                                 </span>
-                                <span className="inline-block text-[9px] font-bold text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded uppercase mt-1 border border-emerald-500/10">
-                                  Petugas Kebersihan
+                                <span className="inline-flex items-center space-x-1 text-[9px] font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-md uppercase mt-1.5 border border-emerald-500/20 font-mono">
+                                  <span>● Petugas Kebersihan</span>
                                 </span>
                               </div>
                             </div>
                           </div>
 
+                          {/* Login Credentials & Password Box for Kepala Gudang */}
+                          <div className="p-3 bg-zinc-900/60 rounded-xl border border-zinc-800/80 space-y-2">
+                            <div className="flex items-center justify-between text-[11px]">
+                              <span className="text-zinc-500 font-mono flex items-center space-x-1">
+                                <Lock className="w-3 h-3 text-emerald-400" />
+                                <span>Kata Sandi:</span>
+                              </span>
+                              <div className="flex items-center space-x-1.5">
+                                <span className="font-mono font-bold text-zinc-200">
+                                  {isPasswordShown ? rawPassword : '••••••••'}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => togglePasswordVisibility(u.id)}
+                                  className="p-1 text-zinc-500 hover:text-zinc-300 rounded cursor-pointer"
+                                  title={isPasswordShown ? 'Sembunyikan Kata Sandi' : 'Lihat Kata Sandi'}
+                                >
+                                  {isPasswordShown ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center space-x-1.5 pt-1 border-t border-zinc-850">
+                              <button
+                                type="button"
+                                onClick={() => handleCopyCleanerCredentials(u)}
+                                className={`flex-1 py-1.5 px-2 rounded-lg text-[10px] font-bold transition-all flex items-center justify-center space-x-1 cursor-pointer ${
+                                  isCopied
+                                    ? 'bg-emerald-500 text-zinc-950'
+                                    : 'bg-zinc-850 hover:bg-zinc-800 text-zinc-300 border border-zinc-750'
+                                }`}
+                                title="Salin Email & Sandi Akun"
+                              >
+                                {isCopied ? (
+                                  <>
+                                    <Check className="w-3 h-3" />
+                                    <span>Tersalin!</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Copy className="w-3 h-3" />
+                                    <span>Salin Akun</span>
+                                  </>
+                                )}
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => handleShareCleanerWhatsApp(u)}
+                                className="py-1.5 px-2.5 bg-emerald-600/80 hover:bg-emerald-500 text-white rounded-lg text-[10px] font-bold transition-all flex items-center space-x-1 cursor-pointer"
+                                title="Kirim data login via WhatsApp"
+                              >
+                                <Share2 className="w-3 h-3" />
+                                <span>WhatsApp</span>
+                              </button>
+                            </div>
+                          </div>
+
                           {/* Quick Stats Grid */}
-                          <div className="grid grid-cols-3 gap-2 py-2 px-2.5 bg-zinc-900/30 rounded-lg border border-zinc-900/60 text-center">
+                          <div className="grid grid-cols-3 gap-2 py-2 px-2.5 bg-zinc-900/40 rounded-xl border border-zinc-850 text-center">
                             <div>
-                              <span className="block text-[10px] text-zinc-500 uppercase font-mono">Laporan</span>
+                              <span className="block text-[9px] text-zinc-500 uppercase font-mono font-bold">Laporan</span>
                               <span className="font-bold text-xs text-zinc-200 font-mono">{totalCleanerReports}</span>
                             </div>
                             <div>
-                              <span className="block text-[10px] text-zinc-500 uppercase font-mono">Tugas</span>
+                              <span className="block text-[9px] text-zinc-500 uppercase font-mono font-bold">Tugas</span>
                               <span className="font-bold text-xs text-zinc-200 font-mono">{totalCleanerTasks}</span>
                             </div>
                             <div>
-                              <span className="block text-[10px] text-zinc-500 uppercase font-mono">Absen</span>
+                              <span className="block text-[9px] text-zinc-500 uppercase font-mono font-bold">Absen</span>
                               <span className="font-bold text-xs text-zinc-200 font-mono">{totalCleanerAttendance}</span>
                             </div>
                           </div>
 
                           {/* Action Buttons */}
-                          <div className="pt-2 border-t border-zinc-900 flex items-center justify-between gap-2">
+                          <div className="pt-2 border-t border-zinc-850 flex items-center justify-between gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setNewTaskCleaner(u.id);
+                                setActiveTab('TASKS');
+                              }}
+                              className="py-2 px-3 bg-zinc-850 hover:bg-zinc-800 text-zinc-200 rounded-xl text-xs font-semibold flex items-center space-x-1.5 transition-all cursor-pointer border border-zinc-750"
+                              title="Tugaskan pekerjaan untuk petugas ini"
+                            >
+                              <Send className="w-3 h-3 text-emerald-400" />
+                              <span>Beri Tugas</span>
+                            </button>
+
                             <button
                               type="button"
                               onClick={() => handleOpenEditCleaner(u, 'UPLOAD')}
-                              className="flex-1 py-1.5 px-3 bg-emerald-500/10 hover:bg-emerald-500 text-emerald-400 hover:text-zinc-950 border border-emerald-500/20 hover:border-emerald-500 rounded-lg text-xs font-semibold flex items-center justify-center space-x-1.5 transition-all cursor-pointer shadow-sm"
-                              title="Edit Profil dan Foto Petugas"
+                              className="flex-1 py-2 px-3 bg-emerald-500/10 hover:bg-emerald-500 text-emerald-400 hover:text-zinc-950 border border-emerald-500/20 hover:border-emerald-500 rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition-all cursor-pointer shadow-sm"
+                              title="Edit Profil, Foto & Sandi Petugas"
                             >
                               <Edit2 className="w-3.5 h-3.5" />
-                              <span>Edit Profil & Foto</span>
+                              <span>Edit &amp; Sandi</span>
                             </button>
 
                             <button
                               type="button"
                               onClick={() => onDeleteUser(u.id)}
-                              className="p-1.5 px-2.5 hover:bg-rose-500/15 hover:text-rose-400 text-zinc-500 rounded-lg transition-all cursor-pointer border border-transparent hover:border-rose-900/30"
-                              title="Hapus Petugas"
+                              className="p-2 hover:bg-rose-500/15 hover:text-rose-400 text-zinc-500 rounded-xl transition-all cursor-pointer border border-transparent hover:border-rose-900/30"
+                              title="Hapus Akun Petugas"
                             >
-                              <Trash2 className="w-3.5 h-3.5" />
+                              <Trash2 className="w-4 h-4" />
                             </button>
                           </div>
                         </div>
@@ -3294,6 +3517,40 @@ export default function DashboardKepala({
                   />
                 </div>
 
+                {/* Password / Kata Sandi Reset Field */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="block text-xs font-bold text-zinc-300">
+                      Kata Sandi Login Petugas
+                    </label>
+                    <span className="text-[10px] text-zinc-500">Minimal 4 karakter</span>
+                  </div>
+                  <div className="relative">
+                    <input
+                      type={showPasswordInEdit ? 'text' : 'password'}
+                      value={cleanerPasswordInput}
+                      onChange={(e) => {
+                        setCleanerPasswordInput(e.target.value);
+                        if (cleanerUpdateError) setCleanerUpdateError('');
+                      }}
+                      placeholder="Masukkan kata sandi baru..."
+                      disabled={isUpdatingCleaner}
+                      className="w-full px-4 py-2.5 pr-10 bg-zinc-950 border border-zinc-800 focus:border-emerald-500 rounded-xl text-sm text-zinc-200 placeholder-zinc-700 outline-none transition-all font-mono font-medium disabled:opacity-50"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPasswordInEdit(prev => !prev)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300 p-1 rounded cursor-pointer"
+                      title={showPasswordInEdit ? 'Sembunyikan Sandi' : 'Lihat Sandi'}
+                    >
+                      {showPasswordInEdit ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-zinc-500">
+                    Kepala gudang dapat mereset atau mengubah kata sandi petugas kapan saja.
+                  </p>
+                </div>
+
                 {/* Error Banner */}
                 {cleanerUpdateError && (
                   <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs flex items-center space-x-2">
@@ -3306,7 +3563,7 @@ export default function DashboardKepala({
                 <div className="p-3 bg-zinc-900/40 border border-zinc-850 rounded-xl text-[11px] text-zinc-400 flex items-start space-x-2">
                   <Info className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
                   <span>
-                    Perubahan foto dan nama akan langsung diperbarui di database dan disinkronkan ke seluruh sistem (penugasan, laporan kebersihan, dan log absensi).
+                    Perubahan foto, nama, dan kata sandi akan langsung diperbarui di database dan disinkronkan ke seluruh sistem.
                   </span>
                 </div>
 
@@ -3343,6 +3600,16 @@ export default function DashboardKepala({
           </div>
         )}
       </AnimatePresence>
+
+      {/* Add Cleaner Modal for Kepala Gudang */}
+      {isAddCleanerModalOpen && onAddCleaner && (
+        <AddCleanerModal
+          isOpen={isAddCleanerModalOpen}
+          onClose={() => setIsAddCleanerModalOpen(false)}
+          onAddCleaner={onAddCleaner}
+          existingUsers={users}
+        />
+      )}
 
       {/* Full Location & Photo Verification Modal */}
       {selectedAttendanceForLocationModal && (

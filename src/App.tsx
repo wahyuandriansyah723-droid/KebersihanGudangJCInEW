@@ -470,7 +470,39 @@ export default function App() {
     });
   };
 
-  const handleUpdateUser = async (userId: string, updates: { name?: string; avatarUrl?: string }) => {
+  const handleAddCleaner = async (cleanerData: {
+    name: string;
+    email: string;
+    password: string;
+    avatarUrl?: string;
+  }): Promise<User> => {
+    const normEmail = cleanerData.email.trim().toLowerCase();
+    const cleanName = cleanerData.name.trim();
+
+    // Deterministic ID based on email and name
+    const deterministicId = 'email-' + normEmail.replace(/[^a-zA-Z0-9]/g, '_') + '-' + cleanName.toLowerCase().replace(/[^a-zA-Z0-9]/g, '_');
+
+    const newUser: User = {
+      id: deterministicId,
+      name: cleanName,
+      email: normEmail,
+      role: 'PETUGAS_KEBERSIHAN',
+      password: cleanerData.password,
+      avatarUrl: cleanerData.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=300'
+    };
+
+    try {
+      await saveUserToFirestore(newUser);
+      showToast(`Petugas "${cleanName}" berhasil didaftarkan ke sistem!`, 'success');
+      return newUser;
+    } catch (err) {
+      console.error("Failed to register cleaner", err);
+      showToast("Gagal mendaftarkan petugas.", "error");
+      throw err;
+    }
+  };
+
+  const handleUpdateUser = async (userId: string, updates: { name?: string; avatarUrl?: string; password?: string }) => {
     const userToUpdate = users.find(u => u.id === userId);
     if (!userToUpdate) return;
     const trimmedName = updates.name !== undefined ? updates.name.trim() : userToUpdate.name;
@@ -484,7 +516,8 @@ export default function App() {
       const updatedUser: User = {
         ...userToUpdate,
         name: trimmedName,
-        avatarUrl: updates.avatarUrl !== undefined ? updates.avatarUrl : userToUpdate.avatarUrl
+        avatarUrl: updates.avatarUrl !== undefined ? updates.avatarUrl : userToUpdate.avatarUrl,
+        password: updates.password !== undefined && updates.password.trim() ? updates.password.trim() : userToUpdate.password
       };
 
       // 1. Update user in Firestore
@@ -777,6 +810,7 @@ export default function App() {
                 onDeleteTask={handleDeleteTask}
                 onDeleteReport={handleDeleteReport}
                 onDeleteUser={handleDeleteUser}
+                onAddCleaner={handleAddCleaner}
                 onUpdateUser={handleUpdateUser}
                 onDeleteAttendance={handleDeleteAttendance}
                 onSaveSettings={handleSaveSystemSettings}
